@@ -1,0 +1,3 @@
+[submodule "FileDetectionRuleSets"]
+	path = FileDetectionRuleSets
+	url = https://github.com/SteamDatabase/FileDetectionRuleSets
