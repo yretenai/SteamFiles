@@ -1,12 +1,7 @@
-﻿using System;
-
-namespace SteamFiles
-{
-    class Program
-    {
-        static void Main(string[] args)
-        {
-            Console.WriteLine("Hello World!");
+﻿namespace SteamFiles {
+    public static class Program {
+        private static void Main() {
+            new SteamHandler().Run();
         }
     }
 }
