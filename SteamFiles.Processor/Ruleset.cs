@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -59,8 +60,12 @@ namespace SteamFiles.Processor {
             var detected = new HashSet<string>();
             var list = filelist.ToArray();
             foreach (var (name, tests) in ruleset) {
-                if (list.Any(path => tests.Any(y => y.IsMatch(path)))) {
-                    detected.Add(name);
+                try {
+                    if (list.Any(path => tests.Any(y => y.IsMatch(path)))) {
+                        detected.Add(name);
+                    }
+                } catch (Exception e) {
+                    Console.Error.WriteLine(e);
                 }
             }
 
