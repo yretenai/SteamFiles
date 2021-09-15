@@ -204,7 +204,9 @@ namespace SteamFiles {
                 await ProcessApp(appId, app.KeyValues, depotIds, tags, cdn, cdn.GetConnectionForAppId(appId), cdnClient);
             }
 
-            await File.WriteAllTextAsync("Detected.json", JsonConvert.SerializeObject(tags, Formatting.Indented));
+            var organized = tags.OrderBy(x => x.Key).ToDictionary(x => x.Key, x => x.Value.OrderBy(y => y.AppId).ToArray());
+
+            await File.WriteAllTextAsync("Detected.json", JsonConvert.SerializeObject(organized, Formatting.Indented));
 
             Running = false;
         }
