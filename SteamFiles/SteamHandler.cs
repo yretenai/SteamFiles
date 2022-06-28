@@ -2,21 +2,16 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using JetBrains.Annotations;
-using Newtonsoft.Json;
-using SteamFiles.Processor;
 using SteamKit2;
+using SteamKit2.CDN;
 
 namespace SteamFiles {
-    using RuleDictionary = Dictionary<string, List<Regex>>;
-
-    [PublicAPI]
     public class SteamHandler {
-        private readonly object SteamLock = new();
-
         public SteamHandler() {
             var path = Environment.GetEnvironmentVariable("FILE_DETECTION_RULE_SETS_PATH");
             if (!Directory.Exists(path)) {
@@ -29,12 +24,13 @@ namespace SteamFiles {
             }
 
             Rules = Ruleset.Parse(rules);
+            Steam = new SteamClient();
+            User = Steam.GetHandler<SteamUser>()!;
+            Apps = Steam.GetHandler<SteamApps>()!;
+            Content = Steam.GetHandler<SteamContent>()!;
 
-            Client = new SteamClient();
-            User = Client.GetHandler<SteamUser>()!;
-            Apps = Client.GetHandler<SteamApps>()!;
-
-            LogonDetails.Username = Environment.GetCommandLineArgs()[^1];
+            Console.Out.WriteLine("Username: ");
+            LogonDetails.Username = Console.In.ReadLine();
             Console.Out.WriteLine("Password: ");
             LogonDetails.Password = Console.In.ReadLine();
             Console.Out.WriteLine("2FA: ");
@@ -42,7 +38,7 @@ namespace SteamFiles {
             LogonDetails.ShouldRememberPassword = false;
             LogonDetails.LoginID = (uint)new Random((int)DateTimeOffset.Now.ToUnixTimeSeconds()).Next();
 
-            Callbacks = new CallbackManager(Client);
+            Callbacks = new CallbackManager(Steam);
 
             Callbacks.Subscribe<SteamClient.ConnectedCallback>(ConnectedCallback);
             Callbacks.Subscribe<SteamClient.DisconnectedCallback>(DisconnectedCallback);
@@ -50,6 +46,8 @@ namespace SteamFiles {
             Callbacks.Subscribe<SteamUser.LoggedOnCallback>(LoggedOnCallback);
             Callbacks.Subscribe<SteamUser.SessionTokenCallback>(SessionTokenCallback);
         }
+
+        public Dictionary<string, List<Regex>> Rules { get; set; }
 
         private SteamUser.LogOnDetails LogonDetails { get; set; } = new();
         private LogOnCredentials Credentials { get; } = new();
@@ -64,12 +62,12 @@ namespace SteamFiles {
         private DateTime ConnectTime { get; set; }
         private Dictionary<uint, byte[]> DepotKeys { get; } = new();
 
-        public SteamClient Client { get; set; }
+        public SteamClient Steam { get; set; }
         public SteamUser User { get; set; }
         public SteamApps Apps { get; set; }
+        public SteamContent Content { get; set; }
         public CallbackManager Callbacks { get; set; }
         public Thread? CallbackThread { get; set; }
-        public RuleDictionary Rules { get; set; }
         public uint CellId { get; private set; }
 
         public void Run() {
@@ -90,7 +88,7 @@ namespace SteamFiles {
 
             Running = false;
 
-            Client.Disconnect();
+            Steam.Disconnect();
             Environment.Exit(0);
         }
 
@@ -103,7 +101,7 @@ namespace SteamFiles {
 
             ConnectTime = DateTime.Now;
             Console.WriteLine("Connecting to Steam3...");
-            Client.Connect();
+            Steam.Connect();
         }
 
         private void ResetConnectionFlags() {
@@ -132,7 +130,7 @@ namespace SteamFiles {
                 Console.WriteLine(Connecting ? "Connection to Steam failed. Trying again" : "Lost connection to Steam. Reconnecting");
                 Thread.Sleep(1000 * ++ConnectionBackoff);
                 ResetConnectionFlags();
-                Client.Connect();
+                Steam.Connect();
             }
         }
 
@@ -155,7 +153,7 @@ namespace SteamFiles {
 
         private async void LicenseListCallback(SteamApps.LicenseListCallback licenses) {
             Console.WriteLine("Got license list, request app and depot list");
-            var pics = await Apps.PICSGetProductInfo(ArraySegment<uint>.Empty, licenses.LicenseList.Select(x => x.PackageID));
+            var pics = await Apps.PICSGetProductInfo(ArraySegment<SteamApps.PICSRequest>.Empty, licenses.LicenseList.Select(x => new SteamApps.PICSRequest(x.PackageID)));
 
             var appIds = new HashSet<uint>();
             var depotIds = new HashSet<uint>();
@@ -187,12 +185,20 @@ namespace SteamFiles {
             Console.WriteLine("Requesting app infos");
             var appPics = await Apps.PICSGetProductInfo(appIds.Select(x => new SteamApps.PICSRequest { AccessToken = appTokens.ContainsKey(x) ? appTokens[x] : 0, ID = x }), ArraySegment<SteamApps.PICSRequest>.Empty);
 
-            var tags = new Dictionary<string, HashSet<TagInfo>>();
+            var tags = new Dictionary<string, Dictionary<uint, string>>();
 
             Console.WriteLine("Requesting CDN server list");
             using var cdn = new CDNPool(this);
             await cdn.WaitUntilServers();
-            using var cdnClient = new CDNClient(Client);
+            using var cdnClient = new Client(Steam);
+            
+            if (!Directory.Exists("PICS")) {
+                Directory.CreateDirectory("PICS");
+            }
+
+            if (!Directory.Exists("Manifests")) {
+                Directory.CreateDirectory("Manifests");
+            }
 
             foreach (var (appId, app) in appPics.Results?.SelectMany(x => x.Apps) ?? ArraySegment<KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>>.Empty) {
                 if (app.KeyValues["common"]["type"].AsString()?.ToLower() != "game") {
@@ -201,24 +207,38 @@ namespace SteamFiles {
 
                 Console.WriteLine("Processing {0}", app.KeyValues["common"]["name"].Value ?? $"SteamApp{appId}");
 
-                await ProcessApp(appId, app.KeyValues, depotIds, tags, cdn, cdn.GetConnectionForAppId(appId), cdnClient);
+                var picsPath = Path.Combine("PICS", $"{appId}.vdf");
+                app.KeyValues.SaveToFile(picsPath, false);
+                var cdnServers = cdn.GetConnectionsForAppId(appId);
+                foreach (var cdnServer in cdnServers) {
+                    try {
+                        await ProcessApp(appId, app.KeyValues, depotIds, tags, cdnServer, cdnClient);
+                    }
+                    catch(SteamKitWebRequestException skwre) {
+                        if (skwre.StatusCode == HttpStatusCode.ServiceUnavailable) {
+                            continue;
+                        }
+
+                        throw;
+                    }
+
+                    break;
+                }
             }
-
-            var organized = tags.OrderBy(x => x.Key).ToDictionary(x => x.Key, x => x.Value.OrderBy(y => y.AppId).ToArray());
-
-            await File.WriteAllTextAsync("Detected.json", JsonConvert.SerializeObject(organized, Formatting.Indented));
+            
+            await File.WriteAllTextAsync("Detected.json", JsonSerializer.Serialize(tags));
 
             Running = false;
         }
 
-        private async Task ProcessApp(uint appId, KeyValue app, HashSet<uint> depotIds, Dictionary<string, HashSet<TagInfo>> tags, CDNPool pool, CDNClient.Server? cdn, CDNClient cdnClient) {
+        private async Task ProcessApp(uint appId, KeyValue app, HashSet<uint> depotIds, Dictionary<string, Dictionary<uint, string>> tags, Server? cdn, Client cdnClient) {
             if (cdn == null) {
                 // what?
                 return;
             }
 
             var manifests = new Dictionary<uint, ulong>();
-            var game = new TagInfo(appId, app["common"]["name"].Value ?? $"SteamApp{appId}");
+            var game = app["common"]["name"].Value ?? $"SteamApp{appId}";
             foreach (var depot in app["depots"].Children.Where(depot => depot["manifests"]["public"].Value != null)) {
                 if (depot["config"]["oslist"].AsString()?.Length > 0) {
                     if (!depot["config"]["oslist"].AsString()!.Contains("win")) {
@@ -233,13 +253,9 @@ namespace SteamFiles {
                 }
             }
 
-            if (!Directory.Exists("Manifests")) {
-                Directory.CreateDirectory("Manifests");
-            }
-
             foreach (var (depotId, manifest) in manifests) {
-                var manifestPath = Path.Combine("Manifests", $"{depotId}.json");
-                List<string> files;
+                var manifestPath = Path.Combine("Manifests", $"{depotId}.txt");
+                string[] files;
                 if (!File.Exists(manifestPath)) {
                     if (!DepotKeys.ContainsKey(depotId)) {
                         var depotKey = await Apps.GetDepotDecryptionKey(depotId, appId);
@@ -251,35 +267,32 @@ namespace SteamFiles {
                     }
 
                     var key = DepotKeys[depotId];
-                    var auth = await pool.AuthenticateConnection(appId, depotId, cdn);
-                    var manifestData = await cdnClient.DownloadManifestAsync(depotId, manifest, cdn, auth, key.Length > 0 ? key : null);
-                    files = (manifestData.Files ?? new List<DepotManifest.FileData>()).Select(x => x.FileName.Replace("\\", "/")).ToList();
-                    await File.WriteAllTextAsync(manifestPath, JsonConvert.SerializeObject(files));
+                    var manifestRequestCode = await Content.GetManifestRequestCode(depotId, appId, manifest, "public");
+                    var manifestData = await cdnClient.DownloadManifestAsync(depotId, manifest, manifestRequestCode, cdn, key.Length > 0 ? key : null);
+                    files = (manifestData.Files ?? new List<DepotManifest.FileData>()).Select(x => x.FileName.Replace("\\", "/")).ToArray();
+                    await File.WriteAllTextAsync(manifestPath, string.Join(Environment.NewLine, files));
                 } else {
-                    files = JsonConvert.DeserializeObject<List<string>>(await File.ReadAllTextAsync(manifestPath));
+                    files = await File.ReadAllLinesAsync(manifestPath);
                 }
-
+                
                 var detected = Ruleset.Run(files, Rules);
 
                 foreach (var detectedTag in detected) {
                     if (!tags.TryGetValue(detectedTag, out var detectedGames)) {
-                        detectedGames = new HashSet<TagInfo>();
+                        detectedGames = new Dictionary<uint, string>();
                         tags[detectedTag] = detectedGames;
                     }
 
-                    detectedGames.Add(game);
+                    detectedGames[appId] = game;
                 }
             }
         }
 
-        [PublicAPI]
-        public class LogOnCredentials {
+        private class LogOnCredentials {
             public bool LoggedOn { get; set; }
             public ulong SessionToken { get; set; }
 
             public bool IsValid => LoggedOn;
         }
-
-        public record TagInfo(uint AppId, string Name);
     }
 }

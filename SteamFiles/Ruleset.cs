@@ -4,19 +4,18 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-namespace SteamFiles.Processor {
+namespace SteamFiles {
     using RuleDictionary = Dictionary<string, List<Regex>>;
 
     public static class Ruleset {
         public static RuleDictionary Parse(string path) {
             using var stream = File.OpenRead(path);
             using var reader = new StreamReader(stream);
-            string? line;
 
             var ruleset = new Dictionary<string, List<Regex>>();
 
             var category = "";
-            while ((line = reader.ReadLine()) != null) {
+            while (reader.ReadLine() is { } line) {
                 if (line.Contains(';')) {
                     line = line[..line.IndexOf(';')];
                 }

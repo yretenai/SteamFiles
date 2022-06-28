@@ -4,11 +4,10 @@ using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using JetBrains.Annotations;
 using SteamKit2;
+using SteamKit2.CDN;
 
 namespace SteamFiles {
-    [PublicAPI]
     public class CDNPool : IDisposable {
         private readonly object Lock = new();
 
@@ -18,7 +17,7 @@ namespace SteamFiles {
         }
 
         public SteamHandler Handler { get; }
-        private List<CDNClient.Server> Servers { get; } = new();
+        private List<Server> Servers { get; } = new();
         public bool Running { get; private set; }
 
         private Dictionary<string, string> CDNKeys { get; } = new();
@@ -34,11 +33,11 @@ namespace SteamFiles {
 
             while (Running) {
                 try {
-                    if (!Handler.Client.IsConnected) {
+                    if (!Handler.Steam.IsConnected) {
                         continue;
                     }
 
-                    var servers = ContentServerDirectoryService.LoadAsync(Handler.Client.Configuration, (int)Handler.CellId, CancellationToken.None).Result;
+                    var servers = ContentServerDirectoryService.LoadAsync(Handler.Steam.Configuration, (int)Handler.CellId, CancellationToken.None).Result;
                     if (servers.Count == 0) {
                         continue;
                     }
@@ -69,9 +68,9 @@ namespace SteamFiles {
             Running = false;
         }
 
-        public CDNClient.Server? GetConnectionForAppId(uint appId) {
+        public Server[] GetConnectionsForAppId(uint appId) {
             lock (Lock) {
-                return Servers.FirstOrDefault(x => x.AllowedAppIds == null || x.AllowedAppIds.Contains(appId));
+                return Servers.Where(x => x.AllowedAppIds.Length == 0 || x.AllowedAppIds.Contains(appId)).ToArray();
             }
         }
 
@@ -79,25 +78,6 @@ namespace SteamFiles {
             while (!FirstLoopDone) {
                 await Task.Delay(TimeSpan.FromSeconds(5));
             }
-        }
-
-        public async Task<string> AuthenticateConnection(uint appId, uint depotId, CDNClient.Server server) {
-            var host = server.Host!;
-            if (host.EndsWith(".steampipe.steamcontent.com")) {
-                host = "steampipe.steamcontent.com";
-            } else if (host.EndsWith(".steamcontent.com")) {
-                host = "steamcontent.com";
-            }
-
-            var cdnKey = $"{depotId}/{host}";
-
-            if (!CDNKeys.TryGetValue(cdnKey, out var token)) {
-                var request = await Handler.Apps.GetCDNAuthToken(appId, depotId, host);
-                token = request.Token;
-                CDNKeys[cdnKey] = token;
-            }
-
-            return token;
         }
     }
 }
