@@ -251,8 +251,10 @@ namespace SteamFiles {
 
                 if (uint.TryParse(depot.Name, out var depotId) &&
                     depotIds.Contains(depotId) &&
+                    depot["dlcappid"] == KeyValue.Invalid &&
                     ulong.TryParse(depot["manifests"]["public"].AsString(), out var manifestId)) {
                     manifests[depotId] = manifestId;
+                    Console.WriteLine(depot["name"].AsString());
                 }
             }
 
@@ -272,7 +274,7 @@ namespace SteamFiles {
 
                     var key = DepotKeys[depotId];
                     var manifestRequestCode = await Content.GetManifestRequestCode(depotId, appId, manifest, "public");
-                    var manifestData = await cdnClient.DownloadManifestAsync(depotId, manifest, manifestRequestCode, cdn, key.Length > 0 ? key : null);
+                    var manifestData = await cdnClient.DownloadManifestAsync(depotId, manifest, manifestRequestCode, cdn, key);
                     files = (manifestData.Files ?? new List<DepotManifest.FileData>()).Select(x => x.FileName.Replace("\\", "/")).ToArray();
                     await File.WriteAllTextAsync(manifestPath, string.Join(Environment.NewLine, files));
                 } else {

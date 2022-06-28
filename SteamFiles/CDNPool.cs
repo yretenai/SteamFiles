@@ -70,7 +70,7 @@ namespace SteamFiles {
 
         public Server[] GetConnectionsForAppId(uint appId) {
             lock (Lock) {
-                return Servers.Where(x => x.AllowedAppIds.Length == 0 || x.AllowedAppIds.Contains(appId)).ToArray();
+                return Servers.Where(x => (x.AllowedAppIds.Length == 0 || x.AllowedAppIds.Contains(appId)) && x.Type is "SteamCache" or "CDN").ToArray();
             }
         }
 
