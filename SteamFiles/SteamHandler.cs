@@ -278,6 +278,7 @@ namespace SteamFiles {
                 var detected = Ruleset.Run(files, Rules);
 
                 foreach (var detectedTag in detected) {
+                    Console.WriteLine($"Detected tag {detectedTag}");
                     if (!tags.TryGetValue(detectedTag, out var detectedGames)) {
                         detectedGames = new Dictionary<uint, string>();
                         tags[detectedTag] = detectedGames;
