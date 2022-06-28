@@ -214,6 +214,9 @@ namespace SteamFiles {
                     try {
                         await ProcessApp(appId, app.KeyValues, depotIds, tags, cdnServer, cdnClient);
                     }
+                    catch (TaskCanceledException) {
+                        continue;
+                    }
                     catch(SteamKitWebRequestException skwre) {
                         if (skwre.StatusCode == HttpStatusCode.ServiceUnavailable) {
                             continue;
@@ -253,6 +256,7 @@ namespace SteamFiles {
                 }
             }
 
+            var allFiles = new HashSet<string>();
             foreach (var (depotId, manifest) in manifests) {
                 var manifestPath = Path.Combine("Manifests", $"{depotId}.txt");
                 string[] files;
@@ -274,18 +278,23 @@ namespace SteamFiles {
                 } else {
                     files = await File.ReadAllLinesAsync(manifestPath);
                 }
-                
-                var detected = Ruleset.Run(files, Rules);
 
-                foreach (var detectedTag in detected) {
-                    Console.WriteLine($"Detected tag {detectedTag}");
-                    if (!tags.TryGetValue(detectedTag, out var detectedGames)) {
-                        detectedGames = new Dictionary<uint, string>();
-                        tags[detectedTag] = detectedGames;
-                    }
-
-                    detectedGames[appId] = game;
+                allFiles.EnsureCapacity(allFiles.Count + files.Length);
+                foreach (var file in files) {
+                    allFiles.Add(file);
                 }
+            }
+                
+            var detected = Ruleset.Run(allFiles, Rules);
+
+            foreach (var detectedTag in detected) {
+                Console.WriteLine($"Detected tag {detectedTag}");
+                if (!tags.TryGetValue(detectedTag, out var detectedGames)) {
+                    detectedGames = new Dictionary<uint, string>();
+                    tags[detectedTag] = detectedGames;
+                }
+
+                detectedGames[appId] = game;
             }
         }
 
