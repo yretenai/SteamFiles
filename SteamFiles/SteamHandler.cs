@@ -12,18 +12,8 @@ using SteamKit2.CDN;
 
 namespace SteamFiles {
     public class SteamHandler {
-        public SteamHandler() {
-            var path = Environment.GetEnvironmentVariable("FILE_DETECTION_RULE_SETS_PATH");
-            if (!Directory.Exists(path)) {
-                throw new InvalidDataException("Set enviornment variable FILE_DETECTION_RULE_SETS_PATH");
-            }
-
-            var rules = Path.Combine(path!, "rules.ini");
-            if (!File.Exists(rules)) {
-                throw new InvalidDataException("Can't find rules.ini");
-            }
-
-            Rules = Ruleset.Parse(rules);
+        public SteamHandler(string[] paths) {
+            Rules = Ruleset.Parse(paths);
             Steam = new SteamClient();
             User = Steam.GetHandler<SteamUser>()!;
             Apps = Steam.GetHandler<SteamApps>()!;
@@ -151,6 +141,23 @@ namespace SteamFiles {
             Credentials.SessionToken = sessionToken.SessionToken;
         }
 
+        private async Task<Server[]> GetConnections() {
+            if (!Steam.IsConnected) {
+                return [];
+            }
+
+            var servers = await Content.GetServersForSteamPipe();
+
+            if (servers.Count == 0) {
+                return [];
+            }
+
+            var weightedCdnServers = servers
+                .Where(server => server is { SteamChinaOnly: false, Type: "SteamCache" or "CDN" })
+                .OrderBy(server => server.WeightedLoad);
+            return weightedCdnServers.ToArray();
+        }
+
         private async void LicenseListCallback(SteamApps.LicenseListCallback licenses) {
             Console.WriteLine("Got license list, request app and depot list");
             var pics = await Apps.PICSGetProductInfo(ArraySegment<SteamApps.PICSRequest>.Empty, licenses.LicenseList.Select(x => new SteamApps.PICSRequest(x.PackageID)));
@@ -188,8 +195,6 @@ namespace SteamFiles {
             var tags = new Dictionary<string, Dictionary<uint, string>>();
 
             Console.WriteLine("Requesting CDN server list");
-            using var cdn = new CDNPool(this);
-            await cdn.WaitUntilServers();
             using var cdnClient = new Client(Steam);
             
             if (!Directory.Exists("PICS")) {
@@ -200,17 +205,33 @@ namespace SteamFiles {
                 Directory.CreateDirectory("Manifests");
             }
 
-            foreach (var (appId, app) in appPics.Results?.SelectMany(x => x.Apps) ?? ArraySegment<KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>>.Empty) {
+            Server[] servers = [];
+            var lastCheckedServers = DateTime.MinValue;
+            var apps = appPics.Results?.SelectMany(x => x.Apps).ToArray() ?? [];
+            var done = 0;
+            foreach (var (appId, app) in apps) {
+                done++;
                 if (app.KeyValues["common"]["type"].AsString()?.ToLower() != "game") {
                     continue;
                 }
 
-                Console.WriteLine("Processing {0}", app.KeyValues["common"]["name"].Value ?? $"SteamApp{appId}");
+                Console.WriteLine("[{1}/{2}] Processing {0}", app.KeyValues["common"]["name"].Value ?? $"SteamApp{appId}", done, apps.Length);
 
                 var picsPath = Path.Combine("PICS", $"{appId}.vdf");
                 app.KeyValues.SaveToFile(picsPath, false);
-                var cdnServers = cdn.GetConnectionsForAppId(appId);
-                foreach (var cdnServer in cdnServers) {
+
+                if (DateTime.Now - lastCheckedServers > TimeSpan.FromMinutes(5)) {
+                    servers = await GetConnections();
+                    lastCheckedServers = DateTime.Now;
+                }
+
+                var validServers = servers.Where(x => x.AllowedAppIds.Length == 0 || x.AllowedAppIds.Contains(appId)).ToArray();
+                if (validServers.Length == 0) {
+                    Console.WriteLine("{0} has no valid CDN servers!", app.KeyValues["common"]["name"].Value ?? $"SteamApp{appId}");
+                    continue;
+                }
+                
+                foreach (var cdnServer in validServers) {
                     try {
                         await ProcessApp(appId, app.KeyValues, depotIds, tags, cdnServer, cdnClient);
                     }
@@ -218,11 +239,11 @@ namespace SteamFiles {
                         continue;
                     }
                     catch(SteamKitWebRequestException skwre) {
-                        if (skwre.StatusCode == HttpStatusCode.ServiceUnavailable) {
+                        if (skwre.StatusCode >= HttpStatusCode.InternalServerError) {
                             continue;
                         }
-
-                        throw;
+                        
+                        // usually 404 or 401.
                     }
 
                     break;
@@ -242,7 +263,7 @@ namespace SteamFiles {
 
             var manifests = new Dictionary<uint, ulong>();
             var game = app["common"]["name"].Value ?? $"SteamApp{appId}";
-            foreach (var depot in app["depots"].Children.Where(depot => depot["manifests"]["public"].Value != null)) {
+            foreach (var depot in app["depots"].Children.Where(depot => depot["manifests"]["public"]["gid"].Value != null)) {
                 if (depot["config"]["oslist"].AsString()?.Length > 0) {
                     if (!depot["config"]["oslist"].AsString()!.Contains("win")) {
                         continue;
@@ -252,9 +273,8 @@ namespace SteamFiles {
                 if (uint.TryParse(depot.Name, out var depotId) &&
                     depotIds.Contains(depotId) &&
                     depot["dlcappid"] == KeyValue.Invalid &&
-                    ulong.TryParse(depot["manifests"]["public"].AsString(), out var manifestId)) {
+                    ulong.TryParse(depot["manifests"]["public"]["gid"].AsString(), out var manifestId)) {
                     manifests[depotId] = manifestId;
-                    Console.WriteLine(depot["name"].AsString());
                 }
             }
 
@@ -268,7 +288,7 @@ namespace SteamFiles {
                         if (depotKey.Result == EResult.OK) {
                             DepotKeys[depotId] = depotKey.DepotKey;
                         } else {
-                            DepotKeys[depotId] = Array.Empty<byte>();
+                            continue;
                         }
                     }
 

@@ -8,47 +8,48 @@ namespace SteamFiles {
     using RuleDictionary = Dictionary<string, List<Regex>>;
 
     public static class Ruleset {
-        public static RuleDictionary Parse(string path) {
-            using var stream = File.OpenRead(path);
-            using var reader = new StreamReader(stream);
+        public static RuleDictionary Parse(params string[] paths) {
+            var ruleset = new RuleDictionary();
+            foreach (var path in paths) {
+                using var stream = File.OpenRead(path);
+                using var reader = new StreamReader(stream);
 
-            var ruleset = new Dictionary<string, List<Regex>>();
+                var category = "";
+                while (reader.ReadLine() is { } line) {
+                    if (line.Contains(';')) {
+                        line = line[..line.IndexOf(';')];
+                    }
 
-            var category = "";
-            while (reader.ReadLine() is { } line) {
-                if (line.Contains(';')) {
-                    line = line[..line.IndexOf(';')];
-                }
+                    line = line.Trim();
 
-                line = line.Trim();
+                    if (line.Length == 0) {
+                        continue;
+                    }
 
-                if (line.Length == 0) {
-                    continue;
-                }
+                    if (line[0] == '[') {
+                        category = line[1..^1];
+                        continue;
+                    }
 
-                if (line[0] == '[') {
-                    category = line[1..^1];
-                    continue;
-                }
+                    var key = line[..line.IndexOf('=')].Trim();
+                    var value = line[(line.IndexOf('=') + 1)..].Trim();
 
-                var key = line[..line.IndexOf('=')].Trim();
-                var value = line[(line.IndexOf('=') + 1)..].Trim();
+                    if (key.EndsWith("[]")) {
+                        key = key[..^2];
+                    }
 
-                if (key.EndsWith("[]")) {
-                    key = key[..^2];
-                }
+                    key = $"{category}.{key}";
 
-                key = $"{category}.{key}";
+                    if (!ruleset.TryGetValue(key, out var rules)) {
+                        rules = new List<Regex>();
+                        ruleset[key] = rules;
+                    }
 
-                if (!ruleset.TryGetValue(key, out var rules)) {
-                    rules = new List<Regex>();
-                    ruleset[key] = rules;
-                }
-
-                try {
-                    rules.Add(new Regex(value, RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
-                } catch {
-                    rules.Add(new Regex(value.Replace("\\_", "_"), RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace));
+                    try {
+                        rules.Add(new Regex(value, RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+                    } catch {
+                        rules.Add(new Regex(value.Replace("\\_", "_"), RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace));
+                    }
                 }
             }
 
