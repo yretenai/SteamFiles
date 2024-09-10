@@ -160,7 +160,7 @@ namespace SteamFiles {
 
         private async void LicenseListCallback(SteamApps.LicenseListCallback licenses) {
             Console.WriteLine("Got license list, request app and depot list");
-            var pics = await Apps.PICSGetProductInfo(ArraySegment<SteamApps.PICSRequest>.Empty, licenses.LicenseList.Select(x => new SteamApps.PICSRequest(x.PackageID)));
+            var pics = await Apps.PICSGetProductInfo(ArraySegment<SteamApps.PICSRequest>.Empty, licenses.LicenseList.Select(x => new SteamApps.PICSRequest(x.PackageID, x.AccessToken)));
 
             var appIds = new HashSet<uint>();
             var depotIds = new HashSet<uint>();
