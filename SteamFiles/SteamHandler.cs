@@ -197,7 +197,8 @@ public class SteamHandler {
         var done = 0;
         foreach (var (appId, app) in apps) {
             done++;
-            if (app.KeyValues["common"]["type"].AsString()?.ToLower() != "game") {
+            var name = app.KeyValues["common"]["type"].AsString()?.ToLower();
+            if (name is not ("game" or "tool" or "demo" or "application" or "dlc")) {
                 continue;
             }
 
