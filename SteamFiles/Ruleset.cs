@@ -4,72 +4,72 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-namespace SteamFiles {
-    using RuleDictionary = Dictionary<string, List<Regex>>;
+namespace SteamFiles;
 
-    public static class Ruleset {
-        public static RuleDictionary Parse(params string[] paths) {
-            var ruleset = new RuleDictionary();
-            foreach (var path in paths) {
-                using var stream = File.OpenRead(path);
-                using var reader = new StreamReader(stream);
+using RuleDictionary = Dictionary<string, List<Regex>>;
 
-                var category = "";
-                while (reader.ReadLine() is { } line) {
-                    if (line.Contains(';')) {
-                        line = line[..line.IndexOf(';')];
-                    }
+public static class Ruleset {
+    public static RuleDictionary Parse(params string[] paths) {
+        var ruleset = new RuleDictionary();
+        foreach (var path in paths) {
+            using var stream = File.OpenRead(path);
+            using var reader = new StreamReader(stream);
 
-                    line = line.Trim();
-
-                    if (line.Length == 0) {
-                        continue;
-                    }
-
-                    if (line[0] == '[') {
-                        category = line[1..^1];
-                        continue;
-                    }
-
-                    var key = line[..line.IndexOf('=')].Trim();
-                    var value = line[(line.IndexOf('=') + 1)..].Trim();
-
-                    if (key.EndsWith("[]")) {
-                        key = key[..^2];
-                    }
-
-                    key = $"{category}.{key}";
-
-                    if (!ruleset.TryGetValue(key, out var rules)) {
-                        rules = new List<Regex>();
-                        ruleset[key] = rules;
-                    }
-
-                    try {
-                        rules.Add(new Regex(value, RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
-                    } catch {
-                        rules.Add(new Regex(value.Replace("\\_", "_"), RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace));
-                    }
+            var category = "";
+            while (reader.ReadLine() is { } line) {
+                if (line.Contains(';')) {
+                    line = line[..line.IndexOf(';')];
                 }
-            }
 
-            return ruleset;
-        }
+                line = line.Trim();
 
-        public static HashSet<string> Run(IEnumerable<string> filelist, RuleDictionary ruleset) {
-            var detected = new HashSet<string>();
-            var list = filelist.ToArray();
-            foreach (var (name, tests) in ruleset) {
+                if (line.Length == 0) {
+                    continue;
+                }
+
+                if (line[0] == '[') {
+                    category = line[1..^1];
+                    continue;
+                }
+
+                var key = line[..line.IndexOf('=')].Trim();
+                var value = line[(line.IndexOf('=') + 1)..].Trim();
+
+                if (key.EndsWith("[]")) {
+                    key = key[..^2];
+                }
+
+                key = $"{category}.{key}";
+
+                if (!ruleset.TryGetValue(key, out var rules)) {
+                    rules = [];
+                    ruleset[key] = rules;
+                }
+
                 try {
-                    if (list.Any(path => tests.Any(y => y.IsMatch(path)))) {
-                        detected.Add(name);
-                    }
-                } catch (Exception e) {
-                    Console.Error.WriteLine(e);
+                    rules.Add(new Regex(value, RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+                } catch {
+                    rules.Add(new Regex(value.Replace("\\_", "_"), RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace));
                 }
             }
-
-            return detected;
         }
+
+        return ruleset;
+    }
+
+    public static HashSet<string> Run(IEnumerable<string> filelist, RuleDictionary ruleset) {
+        var detected = new HashSet<string>();
+        var list = filelist.ToArray();
+        foreach (var (name, tests) in ruleset) {
+            try {
+                if (list.Any(path => tests.Any(y => y.IsMatch(path)))) {
+                    detected.Add(name);
+                }
+            } catch (Exception e) {
+                Console.Error.WriteLine(e);
+            }
+        }
+
+        return detected;
     }
 }
