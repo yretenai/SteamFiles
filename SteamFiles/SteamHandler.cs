@@ -183,13 +183,8 @@ public class SteamHandler {
         Console.WriteLine("Requesting CDN server list");
         using var cdnClient = new Client(Steam);
             
-        if (!Directory.Exists("PICS")) {
-            Directory.CreateDirectory("PICS");
-        }
-
-        if (!Directory.Exists("Manifests")) {
-            Directory.CreateDirectory("Manifests");
-        }
+        Directory.CreateDirectory("PICS");
+        Directory.CreateDirectory("Manifests");
 
         Server[] servers = [];
         var lastCheckedServers = DateTime.MinValue;
@@ -242,7 +237,7 @@ public class SteamHandler {
         Running = false;
     }
 
-    private async static Task SaveTags(Dictionary<string, Dictionary<uint, string>> tags) {
+    private static async Task SaveTags(Dictionary<string, Dictionary<uint, string>> tags) {
         await using var stream = new FileStream("Detected.toml", FileMode.Create, FileAccess.Write);
         await using var writer = new StreamWriter(stream);
         foreach (var (category, appIds) in tags.OrderBy(x => x.Key)) {
@@ -285,7 +280,8 @@ public class SteamHandler {
 
         var allFiles = new HashSet<string>();
         foreach (var (depotId, manifest) in manifests) {
-            var manifestPath = Path.Combine("Manifests", $"{depotId}.txt");
+            Directory.CreateDirectory(Path.Combine("Manifests", depotId.ToString()));
+            var manifestPath = Path.Combine("Manifests", depotId.ToString(), $"{manifest}.txt");
             string[] files;
             if (!File.Exists(manifestPath)) {
                 if (!DepotKeys.ContainsKey(depotId)) {
