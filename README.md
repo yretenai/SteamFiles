@@ -1,3 +1,3 @@
 # SteamFiles
 
-A C# Library to use SteamDatabase's File Detection rulesets.
+A C# tool to tag an entire library with SteamDatabase's File Detection rulesets. 
